@@ -1,32 +1,33 @@
 package org.example;
 
 import org.apache.commons.cli.*;
-import org.example.utils.DBUtils;
+import org.example.ds.DataSource;
 import org.example.utils.XmlUtils;
 
+import java.sql.SQLException;
 import java.util.Arrays;
 import java.util.Properties;
 
 public class Main {
-    public static void main(String[] args) throws ParseException {
+    public static void main(String[] args) throws ParseException, SQLException {
         System.out.println(Arrays.toString(args));
         final String ADD_COMMAND = "A";
         final String FIND_COMMAND = "F";
         final String CREATE_XML_FILE = "C";
         final String MAN_COMMAND = "man";
-        if (DBUtils.dbNotExists()) {
+        if (org.example.utils.DbUtils.dbNotExists()) {
             //Создание таблиц
-            DBUtils.initDb();
+            org.example.utils.DbUtils.initDb();
             //Заполнение данными
-            DBUtils.findOrCreateWellAndAddEquipments("well1", 5);
-            DBUtils.findOrCreateWellAndAddEquipments("well2", 5);
-            DBUtils.findOrCreateWellAndAddEquipments("well3", 5);
+            org.example.utils.DbUtils.findOrCreateWellAndAddEquipments(DataSource.getConnection(), "well1", 5);
+            org.example.utils.DbUtils.findOrCreateWellAndAddEquipments(DataSource.getConnection(), "well2", 5);
+            org.example.utils.DbUtils.findOrCreateWellAndAddEquipments(DataSource.getConnection(), "well3", 5);
         }
 
         Options options = new Options();
         Option addEquipmentToWellOpt = Option.builder()
                 .longOpt(ADD_COMMAND)
-                .argName("property=value" )
+                .argName("property=value")
                 .hasArgs()
                 .valueSeparator()
                 .numberOfArgs(2)
@@ -38,7 +39,8 @@ public class Main {
                         """)
                 .build();
 
-        Option findWellByNameOpt = new Option(FIND_COMMAND, true, "Вывести оборудование по имени скважины");
+        Option findWellByNameOpt = new Option(FIND_COMMAND, true,
+                "Вывести оборудование по имени скважины");
 
         Option createFileOpt = new Option(CREATE_XML_FILE, true, "Генерация xml файла");
         Option manOpt = new Option(MAN_COMMAND, false, "Справка по командам");
@@ -56,11 +58,11 @@ public class Main {
             Properties properties = cmd.getOptionProperties(ADD_COMMAND);
             String wellName =  properties.getProperty("well");
             int countEquipment = Integer.parseInt(properties.getProperty("count").trim());
-            DBUtils.findOrCreateWellAndAddEquipments(wellName, countEquipment);
+            org.example.utils.DbUtils.findOrCreateWellAndAddEquipments(DataSource.getConnection(), wellName, countEquipment);
         } else if (cmd.hasOption(FIND_COMMAND)) {
-            DBUtils.showEquipmentsByNamesWell(DBUtils.parseToNames(args));
+            org.example.utils.DbUtils.showEquipmentsByNamesWell(org.example.utils.DbUtils.parseToNames(args));
         } else if (cmd.hasOption(CREATE_XML_FILE)) {
-            XmlUtils.createOrderXmlFile(DBUtils.getAllWellAndEquipments(), args[1]);
+            XmlUtils.createOrderXmlFile(org.example.utils.DbUtils.getAllWellAndEquipments(), args[1]);
         } else if(cmd.hasOption(MAN_COMMAND)) {
             formatter.printHelp("CLI_helper", options);
         } else {

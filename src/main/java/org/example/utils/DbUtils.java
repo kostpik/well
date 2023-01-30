@@ -1,37 +1,63 @@
 package org.example.utils;
 
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Objects;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
+
 import org.example.domain.Equipment;
 import org.example.domain.Well;
 import org.example.ds.DataSource;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import java.sql.*;
-import java.util.*;
-import java.util.stream.Collectors;
+public final class DbUtils {
 
-public class DBUtils {
+    private static final String INSERT_INTO_WELL_NAME = "INSERT INTO well(NAME) VALUES(?);";
 
-    private static final String CREATE_WELL_BY_NAME = "INSERT INTO well(NAME) VALUES(?);";
-    private static final String SELECT_WELL_BY_NAME = """  
+    private DbUtils() {
+        throw new UnsupportedOperationException("Нет необходимости "
+                 + "создавать объект утилитного класса");
+    }
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(DbUtils.class);
+
+    private static final String CREATE_WELL_BY_NAME =
+            "INSERT INTO well(NAME) VALUES(?);";
+    private static final String SELECT_WELL_BY_NAME = """
             SELECT * FROM well WHERE name = ?""";
     private static final String CREATE_EQUIPMENT_BY_WELL_ID = """
             INSERT INTO equipment(NAME, WELL_ID) VALUES(?,?);""";
     private static final String SEARCH_EQUIPMENT_BY_NAME_WELL = """
                     SELECT w.name, COUNT(e.id) FROM well w  \s
                         left join equipment e on w.ID = e.WELL_ID
-                    WHERE w.name = ?; 
+                    WHERE w.name = ?;
             """;
     private static final String SEARCH_EQUIPMENT_BY_NAMES_WELL = """
                     SELECT w.name, COUNT(e.id) FROM well w  \s
                         left join equipment e on w.ID = e.WELL_ID
-                    WHERE w.name in 
+                    WHERE w.name in
             """;
     private static final String GROUP_BY_WELL_NAME = """
-             GROUP BY w.NAME; 
+             GROUP BY w.NAME;
             """;
     private static final String SEARCH_ALL_WELLS_AND_EQUIPMENTS = """
-                   SELECT w.ID, w.NAME, e.ID, e.NAME, e.WELL_ID FROM well w 
+                   SELECT w.ID, w.NAME, e.ID, e.NAME, e.WELL_ID FROM well w
                            LEFT JOIN equipment e on w.ID = e.WELL_ID
-                   GROUP BY w.ID, w.NAME, e.ID, e.NAME, e.WELL_ID;     
+                   GROUP BY w.ID, w.NAME, e.ID, e.NAME, e.WELL_ID; 
             """;
     private static final String EXISTS_TABLE_WELL_AND_EQUPMENT = """
             SELECT name FROM sqlite_schema
@@ -55,24 +81,32 @@ public class DBUtils {
             """;
 
     public static void createWell(String name) throws SQLException {
-        final String SQL_QUERY = "INSERT INTO well(NAME) VALUES(?);";
-        try (final Connection con = DataSource.getConnection();
-             final PreparedStatement pStM = con.prepareStatement(SQL_QUERY, 1)) {
+        try (Connection con = DataSource.getConnection();
+             PreparedStatement pStM = con.prepareStatement(INSERT_INTO_WELL_NAME, 1)) {
             final int i = pStM.executeUpdate();
             System.out.println(i);
         }
     }
-  /** Метод добавляет оборудование к скважине, если скважины нет она создается
-   * с именем указанным в wellName
-   * @param wellName наименование искомой скважины
-   * @param countEquipment количество оборудования добавленное к скважине
-   */
-    public static void findOrCreateWellAndAddEquipments(String wellName, Integer countEquipment) {
+    /** Метод добавляет оборудование к скважине, если скважины нет она создается
+     * с именем указанным в wellName
+     * @param wellName наименование искомой скважины
+     * @param countEquipment количество оборудования добавленное к скважине
+     * @param con connection to database
+     */
+
+    public static void findOrCreateWellAndAddEquipments(Connection con, final String wellName, final Integer countEquipment) {
+        final long start = System.nanoTime();
+        LOGGER.info("findOrCreateWellAndEquipments wellName {} countEquipment {}",
+                wellName, countEquipment);
+        Objects.requireNonNull(wellName, () -> "Наименование скважины не может быть null");
+        Objects.requireNonNull(countEquipment, () -> "Количество скважин не может быть null");
+        Objects.requireNonNull(con, () -> "Соединение с БД не инициализировано");
         if (countEquipment <= 0)
             throw new IllegalArgumentException("Количество скважин не может быть 0 или отрицательным числом");
         PreparedStatement pStM = null;
         ResultSet rs = null;
-        try (final Connection con = DataSource.getConnection()) {
+        try {
+            con.setAutoCommit(false);
             pStM = con.prepareStatement(SELECT_WELL_BY_NAME);
             pStM.setString(1, wellName);
             rs = pStM.executeQuery();
@@ -88,41 +122,68 @@ public class DBUtils {
             } else {
                 addEquimpent(countEquipment, con, rs);
             }
+            con.commit();
+            System.out.println("Время выполнения метода findOrCreateWellAndAddEquipments:"
+                    + TimeUnit.SECONDS.convert((System.nanoTime() - start), TimeUnit.NANOSECONDS));
         } catch (SQLException e) {
-            System.out.println(e.getMessage());
+            try {
+                con.rollback();
+            } catch (SQLException ex) {
+                System.out.println(e.getMessage());
+                e.printStackTrace();
+            }
         } finally {
             try {
                 if (rs != null) rs.close();
             } catch (SQLException se) {
                 System.out.println(se.getMessage());
+                se.printStackTrace();
             }
             try {
                 if (pStM != null) pStM.close();
             } catch (SQLException se) {
                 System.out.println(se.getMessage());
+                se.printStackTrace();
+            }
+            try {
+                con.close();
+            } catch (SQLException se) {
+                System.out.println(se.getMessage());
+                se.printStackTrace();
             }
         }
     }
 
-    private static void addEquimpent(Integer countEquipment, Connection con, ResultSet rs) throws SQLException {
-        PreparedStatement pStM;
+    private static void addEquimpent(final Integer countEquipment, final Connection con,final ResultSet rs) throws SQLException {
+        final long start = System.nanoTime();
+        int step = 10_000;
+        System.out.println("step:" + step);
+        PreparedStatement pStM = null;
         int idWell = rs.getInt("id");
         String nameWell = rs.getString("name");
+        pStM = con.prepareStatement(CREATE_EQUIPMENT_BY_WELL_ID);
         for (int i = 1; i <= countEquipment; i++) {
-            pStM = con.prepareStatement(CREATE_EQUIPMENT_BY_WELL_ID);
             pStM.setString(1, nameWell + "-" + UUID.randomUUID());
             pStM.setInt(2, idWell);
-            pStM.execute();
+            pStM.addBatch();
+            if (i % step == 0) {
+//          System.out.printf("iteration:%d, осталось:%d \n", i, countEquipment - i);
+                pStM.executeBatch();
+            }
         }
+        pStM.executeBatch();
+        System.out.printf("addEquipments time:%d countEquipment: %d \n",
+                TimeUnit.SECONDS.convert((System.nanoTime() - start), TimeUnit.NANOSECONDS),
+                countEquipment);
     }
 
-    public static void showEquipmentsByNamesWell(Collection<String> nameWells) {
-        String names = nameWells.stream().map(DBUtils::quote).collect(Collectors.joining(",", "(", ")"));
-        try (final Connection con = DataSource.getConnection();
-             final Statement st = con.createStatement();
-             final ResultSet rs = st.executeQuery(SEARCH_EQUIPMENT_BY_NAMES_WELL + names + GROUP_BY_WELL_NAME)) {
+    public static void showEquipmentsByNamesWell(final Collection<String> nameWells) {
+        String names = nameWells.stream().map(DbUtils::quote).collect(Collectors.joining(",", "(", ")"));
+        try (Connection con = DataSource.getConnection();
+             Statement st = con.createStatement();
+             ResultSet rs = st.executeQuery(SEARCH_EQUIPMENT_BY_NAMES_WELL + names + GROUP_BY_WELL_NAME)) {
             if (!rs.next()) {
-                System.out.println("Не найдено такой/их скважин/ы:" + names.toString());
+                System.out.println("Не найдено такой/их скважин/ы:" + names);
             } else {
                 do {
                     String res = "НА скважине:" + rs.getString(1)
@@ -138,9 +199,9 @@ public class DBUtils {
     }
 
     public static List<Well> getAllWellAndEquipments() {
-        try (final Connection con = DataSource.getConnection();
-             final Statement st = con.createStatement();
-             final ResultSet rs = st.executeQuery(SEARCH_ALL_WELLS_AND_EQUIPMENTS)) {
+        try (Connection con = DataSource.getConnection();
+             Statement st = con.createStatement();
+             ResultSet rs = st.executeQuery(SEARCH_ALL_WELLS_AND_EQUIPMENTS)) {
             var wells = new HashSet<Well>();
             var fillingWells = new HashSet<Well>();
             var equipments = new ArrayList<Equipment>();
@@ -175,14 +236,14 @@ public class DBUtils {
     }
 
     //Возможно не лучший вариант можно было бы использовать JSON.quote(), но не хочется тянуть лишнюю зависимость
-    private static String quote(String n) {
+    private static String quote(final String n) {
         return "'" + n + "'";
     }
 
     public static void initDb() {
 
         PreparedStatement pStm = null;
-        try (final Connection con = DataSource.getConnection();) {
+        try (Connection con = DataSource.getConnection()) {
             pStm = con.prepareStatement(CREATE_TABLE_WELL);
             pStm.execute();
             pStm = con.prepareStatement(CREATE_TABLE_EQUPMENT);
@@ -211,7 +272,7 @@ public class DBUtils {
         return true;
     }
 
-    public static Set<String> parseToNames(String[] args) {
+    public static Set<String> parseToNames(final String[] args) {
         Set<String> wellNames = new HashSet<String>();
         // -F name1,name2,...
         if (args.length == 2 && args[1].contains(",")) {
